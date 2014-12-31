@@ -20,7 +20,7 @@
 Some unit tests for the ssh2 protocol in Transport.
 """
 
-from __future__ import with_statement
+from __future__ import with_statement, print_function
 
 from binascii import hexlify
 import select
@@ -36,7 +36,8 @@ from paramiko import AUTH_FAILED, AUTH_SUCCESSFUL
 from paramiko import OPEN_SUCCEEDED, OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 from paramiko.common import MSG_KEXINIT, cMSG_CHANNEL_WINDOW_ADJUST, \
                             MIN_PACKET_SIZE, MAX_WINDOW_SIZE, \
-                            DEFAULT_WINDOW_SIZE, DEFAULT_MAX_PACKET_SIZE
+                            DEFAULT_WINDOW_SIZE, DEFAULT_MAX_PACKET_SIZE, \
+                            cMSG_DISCONNECT, DISCONNECT_BY_APPLICATION
 from paramiko.py3compat import bytes
 from paramiko.message import Message
 from tests.loop import LoopSocket
@@ -792,3 +793,32 @@ class TransportTest(unittest.TestCase):
                              (None, DEFAULT_WINDOW_SIZE),
                              (2**32, MAX_WINDOW_SIZE)]:
             self.assertEqual(self.tc._sanitize_window_size(val), correct)
+
+    def test_L_accept_return_on_disconnect_msg(self):
+        class ClientThread(threading.Thread):
+            def __init__(self, client):
+                threading.Thread.__init__(self, None, None, self.__class__.__name__)
+                self.setDaemon(True)
+                self.client = client
+
+            def run(self):
+                time.sleep(0.5)
+                m = Message()
+                m.add_byte(cMSG_DISCONNECT)
+                m.add_int(DISCONNECT_BY_APPLICATION)
+                m.add_string('Disconnected by user')
+                m.add_string('')
+                self.client._send_message(m)
+                # We don't set TCP_NODELAY, so just wait a bit to avoid Nagle.
+                time.sleep(0.5)
+                self.client.close()
+
+        self.setup_test_server()
+
+        self.ts._log = lambda level, args: print(args)
+
+        start = time.time()
+        ClientThread(self.tc).start()
+        self.ts.accept(15.0)
+        end = time.time()
+        self.assertTrue(end - start < 5)
